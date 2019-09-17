@@ -1,0 +1,11 @@
+cmake-build-debug/
+.idea/
+*.diff
+*.patch
+*.vscode
+*.vs
+tags
+开发日记/
+build/
+si/
+out/
