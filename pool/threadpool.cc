@@ -1,0 +1,114 @@
+/*
+ * @Author: Ideal Dragon
+ * @Date: 2019-10-31 21:09:06
+ * @email: zhilong_jiang@126.com
+ * @Description: 
+ */
+#include "threadpool.h"
+//构造函数只负责启动一定数量的工作线程
+ThreadPool::ThreadPool(size_t threads)
+: stop(false)
+{
+    //启动 threads 数量的工作线程
+    for(size_t i = 0; i < threads; ++i)
+    {
+        workers.emplace_back(
+            //此处的lambda 表达式捕获this，即线程池对象
+            [this]
+            {
+                //避免虚假唤醒
+                for(;;)
+                {
+                    //定义函数对象的容器，存储任意的返回类型为void参数表不为空的函数
+                    std::function<void()> task;
+                    //临界区
+                    {
+                        //创建互斥锁
+                        std::unique_lock<std::mutex> lock(this->queue_mutex);
+
+                        //阻塞当前线程，直到condition_variable被唤醒
+                        //当线程池状态为stop或者任务队列为空，则停止等待
+                        //等价于
+                        /*
+                        *  while(![this]{return this->stop || ！this->tasks.empty();})
+                        *       wait(lock);
+                        */
+                        this->condition.wait(lock,
+                        [this]{return this->stop || !this->tasks.empty();});
+
+                        //如果当前线程池已经结束且等待队列为空，则应该直接返回
+                        if(this->stop && this->tasks.empty())
+                        return ;
+
+                        //否则就让任务队列的队首任务作为需要执行的任务出队
+                        task = std::move(this->tasks.front());
+                        this->tasks.pop();
+                    }
+                    //执行任务
+                    task();
+                }
+            }
+        );
+    }
+
+}
+
+
+//销毁所有线程池中创建的线程
+ThreadPool::~ThreadPool()
+{
+    //临界区
+    {
+        //创建互斥锁
+        std::unique_lock<std::mutex> lock(queue_mutex);
+
+        //设置线程池的状态
+        stop = true;
+    }
+
+    //通知所有等待线程
+    condition.notify_all();
+
+    //使所有的异步线程转为同步执行,等待工作线程执行结束
+    for(std::thread &worker:workers)
+        worker.join();
+}
+
+
+//向线程池中添加新任务
+//1.支持多个入队参数需要使用变长模板参数
+//2.为了调度执行的任务，需要包装执行的任务，这就意味着需要对任务函数的类型进行包装、构造
+//3.临界区可以在一个作用域里面被创建，最佳实践是RAII的形式
+// template<typename F, typename... Args>
+// auto ThreadPool::enqueue(F&& f, Args&&... args)  //尾置返回类型
+//     -> std::future<typename std::result_of<F(Args...)>::type>
+// {
+//     //推导任务返回类型，result_of推导F(Args...)的返回类型
+//     using return_type = typename std::result_of<F(Args...)>::type;
+
+//     //获得当前任务，将一个返回值为return_type,参数为args的任务函数f封装，
+//     //并得到它的智能指针task
+//     auto task = std::make_shared< std::packaged_task<return_type()> >(
+//         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+//     );
+
+//     //获得 std::future 对象 以供实施线程同步
+//     std::future<return_type> res = task->get_future();
+   
+//    //临界区
+//    {
+//        std::unique_lock<std::mutex> lock(queue_mutex);
+
+//        //禁止在线程池停止后加入新的线程池
+//        if(stop)
+//         throw std::runtime_error("enqueue on stopped ThreadPool");
+
+//         //将线程池添加到执行任务队列中,这个用emplace_back应该也是一样的吧
+//         tasks.emplace( [task]{ (*task)(); } );
+//    }
+
+
+// //通知一个正在等待的线程
+//     condition.notify_one();
+//     return res;
+// }
