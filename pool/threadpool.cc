@@ -5,50 +5,64 @@
  * @Description: 
  */
 #include "threadpool.h"
-//构造函数只负责启动一定数量的工作线程
+#include <cassert>
+#include <iostream>
+
+
 ThreadPool::ThreadPool(size_t threads)
-: stop(false)
+:numThreads_(threads), running_(false)
 {
-    //启动 threads 数量的工作线程
-    for(size_t i = 0; i < threads; ++i)
+
+}
+
+typedef std::function<void()> Task;
+//从任务队列中取出一个任务放到线程
+Task ThreadPool::take()
+{
+    //创建互斥锁
+    std::unique_lock<std::mutex> lock(queue_mutex);
+
+    //注释内容和下面这行等价,任务队列为空且运行状态则执行等待
+    //如果当前的队列不为空或者是停止等待状态，那我就不用再执行wait，我就去执行任务或者退出了
+    // while(tasks.empty() && running_)
+    // {
+    //     condition.wait(lock);
+    // }
+    condition.wait(lock,[this]{return tasks.empty() && running_;});
+
+   //如果当前线程池已经结束且等待队列为空，则应该直接返回
+    if(!running_ && tasks.empty())
+        return nullptr;
+    std::function<void()> task;
+    if(!tasks.empty())
     {
-        workers.emplace_back(
-            //此处的lambda 表达式捕获this，即线程池对象
-            [this]
+        task = std::move(tasks.front());
+        tasks.pop();
+    }
+
+    return task;
+}
+
+
+
+
+//启动函数只负责启动一定数量的工作线程
+void ThreadPool::start()
+{
+    assert(workers.empty());
+    running_ = true;
+    workers.reserve(numThreads_);
+    //启动 threads 数量的工作线程
+    for(size_t i = 0; i < numThreads_; ++i)
+    {
+        workers.emplace_back([this]{
+            while(running_)
             {
-                //避免虚假唤醒
-                for(;;)
-                {
-                    //定义函数对象的容器，存储任意的返回类型为void参数表不为空的函数
-                    std::function<void()> task;
-                    //临界区
-                    {
-                        //创建互斥锁
-                        std::unique_lock<std::mutex> lock(this->queue_mutex);
-
-                        //阻塞当前线程，直到condition_variable被唤醒
-                        //当线程池状态为stop或者任务队列为空，则停止等待
-                        //等价于
-                        /*
-                        *  while(![this]{return this->stop || ！this->tasks.empty();})
-                        *       wait(lock);
-                        */
-                        this->condition.wait(lock,
-                        [this]{return this->stop || !this->tasks.empty();});
-
-                        //如果当前线程池已经结束且等待队列为空，则应该直接返回
-                        if(this->stop && this->tasks.empty())
-                        return ;
-
-                        //否则就让任务队列的队首任务作为需要执行的任务出队
-                        task = std::move(this->tasks.front());
-                        this->tasks.pop();
-                    }
-                    //执行任务
+                Task task(take());
+                if(task)
                     task();
-                }
             }
-        );
+        });
     }
 
 }
@@ -62,8 +76,8 @@ ThreadPool::~ThreadPool()
         //创建互斥锁
         std::unique_lock<std::mutex> lock(queue_mutex);
 
-        //设置线程池的状态
-        stop = true;
+        //停止线程池
+        running_ = false;
     }
 
     //通知所有等待线程

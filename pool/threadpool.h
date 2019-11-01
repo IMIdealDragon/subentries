@@ -11,8 +11,12 @@
 class ThreadPool {
 
 public:
+typedef std::function<void()> Task;
     //在线程池中创建threads个工作线程
     ThreadPool(size_t threads);
+
+    void start();
+    Task take();
 
     //向线程池中增加线程  可变参数模板
 template<typename F, typename... Args>
@@ -36,7 +40,7 @@ auto enqueue(F&& f, Args&&... args)  //尾置返回类型
        std::unique_lock<std::mutex> lock(queue_mutex);
 
        //禁止在线程池停止后加入新的线程池
-       if(stop)
+       if(!running_)
         throw std::runtime_error("enqueue on stopped ThreadPool");
 
         //将线程池添加到执行任务队列中,这个用emplace_back应该也是一样的吧
@@ -61,6 +65,7 @@ private:
     std::mutex queue_mutex;    //互斥锁
     std::condition_variable condition; //互斥条件变量
 
-    //停止线程池标志
-    bool stop;
+    //线程池运行标志
+    bool running_;
+    int  numThreads_;
 };

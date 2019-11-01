@@ -9,6 +9,7 @@ int main()
 {
     //创建一个能够并发执行四个线程的线程池
     ThreadPool pool(4);
+    pool.start();
 
     //创建并发执行线程的结果列表
     std::vector< std::future<std::string> > results;
